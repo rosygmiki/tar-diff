@@ -6,7 +6,7 @@ toolchain go1.26.2
 
 require (
 	github.com/containers/image/v5 v5.36.2
-	github.com/klauspost/compress v1.18.5
+	github.com/klauspost/compress v1.18.6
 )
 
 require (
