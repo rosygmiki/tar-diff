@@ -68,7 +68,7 @@ func (f *FilesystemDataSource) SetCurrentFile(file string) error {
 		err := f.currentFile.Close()
 		f.currentFile = nil
 		if err != nil {
-			return nil
+			return err
 		}
 	}
 	currentFile, err := os.Open(filepath.Join(f.basePath, file))
