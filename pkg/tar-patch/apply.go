@@ -87,8 +87,96 @@ func (f *FilesystemDataSource) Seek(offset int64, whence int) (int64, error) {
 	return f.currentFile.Seek(offset, whence)
 }
 
+// validateRequiredFiles scans the delta to collect all required source files and validates they exist.
+func validateRequiredFiles(delta io.ReadSeeker, dataSource *FilesystemDataSource) error {
+	// Read and validate header
+	buf := make([]byte, len(protocol.DeltaHeader))
+	_, err := io.ReadFull(delta, buf)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(buf, protocol.DeltaHeader[:]) {
+		return fmt.Errorf("invalid delta format")
+	}
+
+	decoder, err := zstd.NewReader(delta)
+	if err != nil {
+		return err
+	}
+
+	r := bufio.NewReader(decoder)
+	requiredFiles := make(map[string]bool)
+
+	// Scan delta to collect all DeltaOpOpen operations
+	for {
+		op, err := r.ReadByte()
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return err
+		}
+
+		size, err := binary.ReadUvarint(r)
+		if err != nil {
+			return err
+		}
+
+		switch op {
+		case protocol.DeltaOpOpen:
+			nameBytes := make([]byte, size)
+			_, err = io.ReadFull(r, nameBytes)
+			if err != nil {
+				return err
+			}
+			requiredFiles[string(nameBytes)] = true
+		case protocol.DeltaOpData, protocol.DeltaOpAddData:
+			// Skip the data bytes
+			_, err = io.CopyN(io.Discard, r, int64(size))
+			if err != nil {
+				return err
+			}
+		case protocol.DeltaOpCopy, protocol.DeltaOpSeek:
+			// These operations don't have additional data to skip
+		}
+	}
+
+	// Close decoder before seeking to ensure no buffered data interferes
+	decoder.Close()
+
+	// Validate all required files exist
+	for file := range requiredFiles {
+		cleanFile := protocol.CleanPath(file)
+		if len(cleanFile) == 0 {
+			continue // Skip invalid paths; Apply() will catch these
+		}
+		// Convert to native path separators for the current OS
+		nativePath := filepath.FromSlash(cleanFile)
+		filePath := filepath.Join(dataSource.basePath, nativePath)
+		if _, err := os.Stat(filePath); err != nil {
+			if os.IsNotExist(err) {
+				return fmt.Errorf("required source file does not exist: %s", cleanFile)
+			}
+			return fmt.Errorf("error accessing source file %s: %w", cleanFile, err)
+		}
+	}
+
+	// Reset delta reader to the beginning for actual patching
+	_, err = delta.Seek(0, io.SeekStart)
+	return err
+}
+
 // Apply applies a binary patch from a delta reader to produce output using the data source.
 func Apply(delta io.Reader, dataSource DataSource, dst io.Writer) error {
+	// Validate required files if we have a seekable delta and FilesystemDataSource
+	if seeker, ok := delta.(io.ReadSeeker); ok {
+		if fsDataSource, ok := dataSource.(*FilesystemDataSource); ok {
+			if err := validateRequiredFiles(seeker, fsDataSource); err != nil {
+				return err
+			}
+		}
+	}
+
 	buf := make([]byte, len(protocol.DeltaHeader))
 	_, err := io.ReadFull(delta, buf)
 	if err != nil {
@@ -167,7 +255,7 @@ func Apply(delta io.Reader, dataSource DataSource, dst io.Writer) error {
 				return err
 			}
 
-			for i := uint64(0); i < size; i++ {
+			for i := range size {
 				addBytes[i] += addBytes2[i]
 			}
 			if _, err := dst.Write(addBytes); err != nil {
