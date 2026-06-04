@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"os"
 
 	"github.com/containers/image/v5/pkg/compression"
 )
@@ -159,15 +160,21 @@ func (g *deltaGenerator) generateForFile(info *targetInfo) error {
 
 	maxBsdiffSize := g.options.maxBsdiffSize
 
+	fmt.Fprintf(os.Stderr, "[DEBUG] generateForFile: file=%q newSize=%d oldSize=%d maxBsdiffSize=%d\n",
+		file.paths[0], file.size, sourceFile.size, maxBsdiffSize)
+
 	// For files that are smaller than the path to the delta source plus some small
 	// space for the delta header, skip doing deltas, as delta data will be larger
 	// than the content.
 	if file.size <= int64(len(sourceFile.paths[0])+4) {
+		fmt.Fprintf(os.Stderr, "[DEBUG] generateForFile: SKIPPED - file too small (size=%d <= pathLen+4=%d)\n",
+			file.size, len(sourceFile.paths[0])+4)
 		return nil
 	}
 
 	switch {
 	case sourceFile.sha1 == file.sha1 && sourceFile.size == file.size:
+		fmt.Fprintf(os.Stderr, "[DEBUG] generateForFile: using WriteOldFile (sha1 match)\n")
 		// Reuse exact file from old tar
 		if err := g.deltaWriter.WriteOldFile(info.source.sourcePath, uint64(sourceFile.size)); err != nil {
 			return err
@@ -177,16 +184,19 @@ func (g *deltaGenerator) generateForFile(info *targetInfo) error {
 			return err
 		}
 	case maxBsdiffSize == 0 || (file.size < maxBsdiffSize && sourceFile.size < maxBsdiffSize):
+		fmt.Fprintf(os.Stderr, "[DEBUG] generateForFile: using BSDIFF (will call SetCurrentFile -> DeltaOpOpen)\n")
 		// Use bsdiff to generate delta
 		if err := g.generateForFileWithBsdiff(info); err != nil {
 			return err
 		}
 	case info.rollsumMatches != nil && info.rollsumMatches.matchRatio > 20:
+		fmt.Fprintf(os.Stderr, "[DEBUG] generateForFile: using ROLLSUMS (will call SetCurrentFile -> DeltaOpOpen)\n")
 		// Use rollsums to generate delta
 		if err := g.generateForFileWithrollsums(info); err != nil {
 			return err
 		}
 	default:
+		fmt.Fprintf(os.Stderr, "[DEBUG] generateForFile: using COPYREST (inline data, NO DeltaOpOpen)\n")
 		if err := g.copyRest(); err != nil {
 			return err
 		}

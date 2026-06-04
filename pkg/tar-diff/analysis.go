@@ -5,6 +5,7 @@ import (
 	"archive/tar"
 	"crypto/sha1"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"log"
 	"os"
@@ -500,6 +501,20 @@ func findFuzzyDeltaSource(sourceInfos []sourceInfo, targetFile *tarFileInfo) *so
 func analyzeForDelta(sources *SourceAnalysis, newTar *tarInfo, oldFiles []io.ReadSeeker, options *Options) (*deltaAnalysis, error) {
 	if options == nil {
 		options = NewOptions()
+	}
+
+	// DEBUG: Log what files we found in source (old) tars
+	fmt.Fprintf(os.Stderr, "[DEBUG] analyzeForDelta: Found %d source files in old tar(s)\n", len(sources.sourceInfos))
+	for i := range sources.sourceInfos {
+		s := &sources.sourceInfos[i]
+		fmt.Fprintf(os.Stderr, "[DEBUG]   old: %q size=%d\n", s.file.paths[0], s.file.size)
+	}
+
+	// DEBUG: Log what files we found in new tar
+	fmt.Fprintf(os.Stderr, "[DEBUG] analyzeForDelta: Found %d files in new tar\n", len(newTar.files))
+	for i := range newTar.files {
+		file := &newTar.files[i]
+		fmt.Fprintf(os.Stderr, "[DEBUG]   new: %q size=%d\n", file.paths[0], file.size)
 	}
 
 	targetInfos := make([]targetInfo, 0, len(newTar.files)+len(newTar.hardlinks))

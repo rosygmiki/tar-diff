@@ -14,7 +14,7 @@ expect_fail () {
 	local desc="$1"
 	shift
 	set +e
-	"$@" &>/dev/null
+	"$@"
 	local code=$?
 	set -e
 	if [[ "$code" -eq 0 ]]; then
@@ -61,13 +61,31 @@ expect_fail "tar-patch missing base dir" ./tar-patch "$TEST_DIR/bad-magic.tardif
 # Force bsdiff-sized payload + -max-bsdiff-size so the delta emits OPEN for data/only.txt;
 # otherwise copyRest-only deltas can apply without that file and expect_fail would flake.
 mkdir -p "$TEST_DIR/solo/data" "$TEST_DIR/solom/data"
+
+echo "=== DEBUG: Creating solo test files ===" >&2
 head -c 4096 /dev/zero >"$TEST_DIR/solo/data/only.txt"
+echo "=== DEBUG: Created solo/data/only.txt, size=$(stat -c%s "$TEST_DIR/solo/data/only.txt" 2>/dev/null || stat -f%z "$TEST_DIR/solo/data/only.txt" 2>/dev/null || wc -c < "$TEST_DIR/solo/data/only.txt")" >&2
+
 cp -a "$TEST_DIR/solo/data/only.txt" "$TEST_DIR/solom/data/only.txt"
 printf 'patched' | dd of="$TEST_DIR/solom/data/only.txt" bs=1 seek=2000 conv=notrunc status=none 2>/dev/null || \
 	printf 'patched' | dd of="$TEST_DIR/solom/data/only.txt" bs=1 seek=2000 conv=notrunc 2>/dev/null
+
+echo "=== DEBUG: Creating tar archives ===" >&2
 create_tar "$TEST_DIR/solo-old.tar" "$TEST_DIR/solo"
+echo "=== DEBUG: Created solo-old.tar.gz, size=$(stat -c%s "$TEST_DIR/solo-old.tar.gz" 2>/dev/null || stat -f%z "$TEST_DIR/solo-old.tar.gz" 2>/dev/null || wc -c < "$TEST_DIR/solo-old.tar.gz")" >&2
+
 create_tar "$TEST_DIR/solo-new.tar" "$TEST_DIR/solom"
+echo "=== DEBUG: Created solo-new.tar.bz2, size=$(stat -c%s "$TEST_DIR/solo-new.tar.bz2" 2>/dev/null || stat -f%z "$TEST_DIR/solo-new.tar.bz2" 2>/dev/null || wc -c < "$TEST_DIR/solo-new.tar.bz2")" >&2
+
+echo "=== DEBUG: Running tar-diff to create solo.tardiff ===" >&2
 ./tar-diff -max-bsdiff-size 64 "$TEST_DIR/solo-old.tar.gz" "$TEST_DIR/solo-new.tar.bz2" "$TEST_DIR/solo.tardiff"
+tardiff_exit=$?
+echo "=== DEBUG: tar-diff exit code: $tardiff_exit ===" >&2
+if [[ -f "$TEST_DIR/solo.tardiff" ]]; then
+	echo "=== DEBUG: solo.tardiff created, size=$(stat -c%s "$TEST_DIR/solo.tardiff" 2>/dev/null || stat -f%z "$TEST_DIR/solo.tardiff" 2>/dev/null || wc -c < "$TEST_DIR/solo.tardiff")" >&2
+else
+	echo "=== DEBUG: solo.tardiff WAS NOT CREATED!" >&2
+fi
 rm -f "$TEST_DIR/solo/data/only.txt"
 if [[ -e "$TEST_DIR/solo/data/only.txt" ]]; then
 	echo "expected solo/data/only.txt removed before tar-patch" >&2

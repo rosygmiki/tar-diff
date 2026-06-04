@@ -89,18 +89,23 @@ func (f *FilesystemDataSource) Seek(offset int64, whence int) (int64, error) {
 
 // validateRequiredFiles scans the delta to collect all required source files and validates they exist.
 func validateRequiredFiles(delta io.ReadSeeker, dataSource *FilesystemDataSource) error {
+	fmt.Fprintf(os.Stderr, "[DEBUG] validateRequiredFiles: ENTRY - basePath=%q\n", dataSource.basePath)
+
 	// Read and validate header
 	buf := make([]byte, len(protocol.DeltaHeader))
 	_, err := io.ReadFull(delta, buf)
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "[DEBUG] validateRequiredFiles: failed to read header: %v\n", err)
 		return err
 	}
 	if !bytes.Equal(buf, protocol.DeltaHeader[:]) {
+		fmt.Fprintf(os.Stderr, "[DEBUG] validateRequiredFiles: invalid delta format\n")
 		return fmt.Errorf("invalid delta format")
 	}
 
 	decoder, err := zstd.NewReader(delta)
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "[DEBUG] validateRequiredFiles: failed to create zstd decoder: %v\n", err)
 		return err
 	}
 
@@ -108,32 +113,41 @@ func validateRequiredFiles(delta io.ReadSeeker, dataSource *FilesystemDataSource
 	requiredFiles := make(map[string]bool)
 
 	// Scan delta to collect all DeltaOpOpen operations
+	fmt.Fprintf(os.Stderr, "[DEBUG] validateRequiredFiles: scanning delta for DeltaOpOpen operations\n")
+	opCount := 0
 	for {
 		op, err := r.ReadByte()
 		if err != nil {
 			if err == io.EOF {
 				break
 			}
+			fmt.Fprintf(os.Stderr, "[DEBUG] validateRequiredFiles: error reading op byte: %v\n", err)
 			return err
 		}
 
 		size, err := binary.ReadUvarint(r)
 		if err != nil {
+			fmt.Fprintf(os.Stderr, "[DEBUG] validateRequiredFiles: error reading size: %v\n", err)
 			return err
 		}
 
 		switch op {
 		case protocol.DeltaOpOpen:
+			opCount++
 			nameBytes := make([]byte, size)
 			_, err = io.ReadFull(r, nameBytes)
 			if err != nil {
+				fmt.Fprintf(os.Stderr, "[DEBUG] validateRequiredFiles: error reading filename: %v\n", err)
 				return err
 			}
-			requiredFiles[string(nameBytes)] = true
+			filename := string(nameBytes)
+			requiredFiles[filename] = true
+			fmt.Fprintf(os.Stderr, "[DEBUG] validateRequiredFiles: DeltaOpOpen #%d: %q\n", opCount, filename)
 		case protocol.DeltaOpData, protocol.DeltaOpAddData:
 			// Skip the data bytes
 			_, err = io.CopyN(io.Discard, r, int64(size))
 			if err != nil {
+				fmt.Fprintf(os.Stderr, "[DEBUG] validateRequiredFiles: error skipping data: %v\n", err)
 				return err
 			}
 		case protocol.DeltaOpCopy, protocol.DeltaOpSeek:
@@ -144,25 +158,49 @@ func validateRequiredFiles(delta io.ReadSeeker, dataSource *FilesystemDataSource
 	// Close decoder before seeking to ensure no buffered data interferes
 	decoder.Close()
 
+	fmt.Fprintf(os.Stderr, "[DEBUG] validateRequiredFiles: scan complete - found %d required files\n", len(requiredFiles))
+
 	// Validate all required files exist
 	for file := range requiredFiles {
+		fmt.Fprintf(os.Stderr, "[DEBUG] validateRequiredFiles: checking file=%q\n", file)
+
 		cleanFile := protocol.CleanPath(file)
+		fmt.Fprintf(os.Stderr, "[DEBUG] validateRequiredFiles:   after CleanPath=%q\n", cleanFile)
+
 		if len(cleanFile) == 0 {
+			fmt.Fprintf(os.Stderr, "[DEBUG] validateRequiredFiles:   SKIPPED (cleanFile is empty)\n")
 			continue // Skip invalid paths; Apply() will catch these
 		}
+
 		// Convert to native path separators for the current OS
 		nativePath := filepath.FromSlash(cleanFile)
+		fmt.Fprintf(os.Stderr, "[DEBUG] validateRequiredFiles:   after FromSlash=%q\n", nativePath)
+
 		filePath := filepath.Join(dataSource.basePath, nativePath)
-		if _, err := os.Stat(filePath); err != nil {
+		fmt.Fprintf(os.Stderr, "[DEBUG] validateRequiredFiles:   full path=%q\n", filePath)
+
+		fileInfo, err := os.Stat(filePath)
+		if err != nil {
 			if os.IsNotExist(err) {
+				fmt.Fprintf(os.Stderr, "[DEBUG] validateRequiredFiles:   FILE DOES NOT EXIST - returning error\n")
 				return fmt.Errorf("required source file does not exist: %s", cleanFile)
 			}
+			fmt.Fprintf(os.Stderr, "[DEBUG] validateRequiredFiles:   os.Stat error: %v\n", err)
 			return fmt.Errorf("error accessing source file %s: %w", cleanFile, err)
 		}
+		fmt.Fprintf(os.Stderr, "[DEBUG] validateRequiredFiles:   EXISTS - size=%d\n", fileInfo.Size())
 	}
 
+	fmt.Fprintf(os.Stderr, "[DEBUG] validateRequiredFiles: all files validated successfully\n")
+
 	// Reset delta reader to the beginning for actual patching
+	fmt.Fprintf(os.Stderr, "[DEBUG] validateRequiredFiles: seeking back to start\n")
 	_, err = delta.Seek(0, io.SeekStart)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[DEBUG] validateRequiredFiles: seek failed: %v\n", err)
+	} else {
+		fmt.Fprintf(os.Stderr, "[DEBUG] validateRequiredFiles: EXIT - success\n")
+	}
 	return err
 }
 
